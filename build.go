@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"embed"
-	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
@@ -52,6 +51,18 @@ func runSudo(command string) error {
 func runPowershell(command string) error {
 	return runCommand("powershell", "-Command", command)
 }
+func windowsToWslPath(winPath string) string {
+	// flip backslashes to forward slashes
+	path := strings.ReplaceAll(winPath, "\\", "/")
+
+	// add /mnt/ drive letter
+	if len(path) > 1 && path[1] == ':' {
+		drive := strings.ToLower(string(path[0]))
+		path = "/mnt/" + drive + path[2:]
+	}
+
+	return path
+}
 
 func main() {
 	fmt.Println("Starting setup...")
@@ -75,7 +86,7 @@ func main() {
 		return
 	}
 
-	runSudo(`wsl -d Ubuntu -- bash -c "sudo -S apt update && sudo -S apt install -y docker.io"`)
+	//runSudo(`wsl -d Ubuntu -- bash -c "sudo -S apt update && sudo -S apt install -y docker.io"`)
 
 	// Get the directory where the executable is located
 	exePath, err := os.Getwd()
@@ -94,7 +105,7 @@ func main() {
 	}
 	fmt.Printf(" Script  found: %s\n", scriptPath)
 	// Read the script content
-	scriptContent, err := os.ReadFile(scriptPath)
+	// scriptContent, err := os.ReadFile(scriptPath)
 	if err != nil {
 		fmt.Println(" Failed to read script file:", err)
 		return
@@ -104,13 +115,18 @@ func main() {
 
 	// Write script to WSL using a simpler approach
 	// First, create the file with content using echo
-	encoded := base64.StdEncoding.EncodeToString(scriptContent)
+	// encoded := base64.StdEncoding.EncodeToString(scriptContent)
+	linuxpath := windowsToWslPath(scriptPath)
+	fmt.Print("Enter sudo password: ")
+	password, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	password = strings.TrimSpace(password)
+	fmt.Println("Password entered:", password)
 	psWrite := fmt.Sprintf(
-		`wsl -d Ubuntu -- bash -c "echo '%s' | base64 -d > %s && chmod +x %s"`,
-		encoded, tmpPath, tmpPath,
+		`wsl -d Ubuntu -- bash -c "echo '%s' | sudo -S bash %s"`,
+		password, linuxpath,
 	)
 
-	runSudo(psWrite)
+	runPowershell(psWrite)
 
 	fmt.Println(" Running script inside WSL...")
 	err = runPowershell(fmt.Sprintf(`wsl -d Ubuntu -- bash %s`, tmpPath))

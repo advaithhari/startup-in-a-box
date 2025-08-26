@@ -3,20 +3,23 @@
 cleanup() {
   echo "stopping program"
 
-   sudo systemctl stop docker
+    systemctl stop docker
 
-   sudo systemctl stop docker.socket
+    systemctl stop docker.socket
 }
-
-sudo systemctl start docker
+apt update
+apt install -y docker.io
+(curl -sSL "https://github.com/buildpacks/pack/releases/download/v0.38.2/pack-v0.38.2-linux.tgz" | sudo tar -C /usr/local/bin/ --no-same-owner -xzv pack)
+systemctl start docker
 
 trap cleanup INT
 
 # Path where your app lives (fixed spot)
-APP_DIR="C:/Users/advai/Documents/projects/stonks/ports-backend"
+APP_DIR="/mnt/c/Users/advai/Documents/projects/stonks/ports-backend/ports"
 
 # Name of the image you want to build
 IMAGE_NAME="myapp:latest"
+
 
 # Builder (you can swap this for another like paketobuildpacks/builder:base)
 BUILDER="paketobuildpacks/builder:base"
@@ -30,12 +33,12 @@ cd "$APP_DIR" || {
 }
 
 # Build the container image with pack
-pack-cli build "$IMAGE_NAME" --path . --builder "$BUILDER"
+pack build "$IMAGE_NAME" --path . --builder "$BUILDER"
 
 # Check if build succeeded
 if [ $? -eq 0 ]; then
-  echo "✅ Build successful! Image created: $IMAGE_NAME"
-  docker run -it --rm $IMAGE_NAME
+  echo "Build successful! Image created: $IMAGE_NAME"
+  docker run --rm $IMAGE_NAME
 
 else
   echo "❌ Build failed."

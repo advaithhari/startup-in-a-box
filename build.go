@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"embed"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -18,6 +21,34 @@ func runCommand(name string, args ...string) error {
 	return cmd.Run()
 }
 
+func runSudo(command string) error {
+	fmt.Print("Enter sudo password: ")
+	password, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	password = strings.TrimSpace(password)
+	fmt.Println("Password entered:", password)
+
+	cmd := exec.Command("powershell", "-Command", command)
+
+	stdin, _ := cmd.StdinPipe()
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Start(); err != nil {
+		fmt.Println("Error starting:", err)
+
+	}
+
+	// Write password into sudo
+	stdin.Write([]byte(password + "\n"))
+	stdin.Close()
+
+	if err := cmd.Wait(); err != nil {
+		fmt.Println("Error:", err)
+	}
+
+	return cmd.Run()
+}
+
 func runPowershell(command string) error {
 	return runCommand("powershell", "-Command", command)
 }
@@ -26,7 +57,7 @@ func main() {
 	fmt.Println("Starting setup...")
 
 	// Step 1: Ensure WSL exists
-	fmt.Println("🔍 Checking for WSL...")
+	fmt.Println(" Checking for WSL...")
 	err := runPowershell("wsl --status")
 	if err != nil {
 		fmt.Println(" Installing WSL with Ubuntu...")
@@ -44,30 +75,52 @@ func main() {
 		return
 	}
 
+	runSudo(`wsl -d Ubuntu -- bash -c "sudo -S apt update && sudo -S apt install -y docker.io"`)
 
-	fmt.Println(" Installing Docker in WSL (if missing)...")
-	dockerInstallCmd := `wsl -d Ubuntu -- bash -c "command -v docker >/dev/null 2>&1 || (sudo apt update && sudo apt install -y docker.io)"`
-
-	err = runPowershell(dockerInstallCmd)
+	// Get the directory where the executable is located
+	exePath, err := os.Getwd()
 	if err != nil {
-		fmt.Println(" Failed to install Docker in WSL.")
+		fmt.Println(" Failed to get executable path:", err)
+		return
+	}
+	exeDir := filepath.Dir(exePath)
+	scriptPath := filepath.Join(exeDir, "startup-in-a-box/buildImage.sh")
+
+	// Check if the script exists
+	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
+		fmt.Printf(" Script not found: %s\n", scriptPath)
+		fmt.Println(" Please make sure buildImage.sh is in the same directory as the executable.")
+		return
+	}
+	fmt.Printf(" Script  found: %s\n", scriptPath)
+	// Read the script content
+	scriptContent, err := os.ReadFile(scriptPath)
+	if err != nil {
+		fmt.Println(" Failed to read script file:", err)
 		return
 	}
 
-	tmpPath := "/buildImage.sh"
-	scriptContent, _ := embeddedScript.ReadFile("buildImage.sh")
-	
+	tmpPath := "/tmp/buildImage.sh"
+
+	// Write script to WSL using a simpler approach
+	// First, create the file with content using echo
+	encoded := base64.StdEncoding.EncodeToString(scriptContent)
 	psWrite := fmt.Sprintf(
-		`wsl -d Ubuntu -- bash -c "cat > %s <<'EOF'\n%s\nEOF\nchmod +x %s"`,
-		tmpPath, string(scriptContent), tmpPath,
+		`wsl -d Ubuntu -- bash -c "echo '%s' | base64 -d > %s && chmod +x %s"`,
+		encoded, tmpPath, tmpPath,
 	)
-	err = runPowershell(psWrite)
+
+	runSudo(psWrite)
+
+	fmt.Println(" Running script inside WSL...")
+	err = runPowershell(fmt.Sprintf(`wsl -d Ubuntu -- bash %s`, tmpPath))
+
 	if err != nil {
-		fmt.Println(" Failed to write script inside WSL.")
-		return
+		fmt.Println(" Script execution failed:", err)
+	} else {
+		fmt.Println(" Setup completed successfully!")
 	}
 
-	fmt.Println("▶ Running script inside WSL...")
-	runPowershell(fmt.Sprintf(`wsl -d Ubuntu -- bash %s`, tmpPath))
+	fmt.Println("Press Enter to exit...")
+	bufio.NewReader(os.Stdin).ReadString('\n')
 }
-

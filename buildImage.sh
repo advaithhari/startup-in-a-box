@@ -3,17 +3,17 @@
 cleanup() {
   echo "stopping program"
 
-  systemctl stop docker
+   sudo systemctl stop docker
 
-  systemctl stop docker.socket
+   sudo systemctl stop docker.socket
 }
 
-systemctl start docker
+sudo systemctl start docker
 
 trap cleanup INT
 
 # Path where your app lives (fixed spot)
-APP_DIR="/home/advaith/Documents/projects/ports-backend/ports"
+APP_DIR="C:/Users/advai/Documents/projects/stonks/ports-backend"
 
 # Name of the image you want to build
 IMAGE_NAME="myapp:latest"

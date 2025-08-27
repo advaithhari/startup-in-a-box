@@ -15,10 +15,10 @@ systemctl start docker
 trap cleanup INT
 
 # Path where your app lives (fixed spot)
-APP_DIR="/mnt/c/Users/advai/Documents/projects/stonks/ports-backend/ports"
+APP_DIR="/mnt/c/Users/advai/Documents/projects/stonks/ports-frontend"
 
 # Name of the image you want to build
-IMAGE_NAME="myapp:latest"
+IMAGE_NAME="myapp:lates"
 
 
 # Builder (you can swap this for another like paketobuildpacks/builder:base)
@@ -38,7 +38,7 @@ pack build "$IMAGE_NAME" --path . --builder "$BUILDER"
 # Check if build succeeded
 if [ $? -eq 0 ]; then
   echo "Build successful! Image created: $IMAGE_NAME"
-  docker run --rm $IMAGE_NAME
+  docker run --rm -p 3001:8501 -e PORT=8501 $IMAGE_NAME
 
 else
   echo "❌ Build failed."

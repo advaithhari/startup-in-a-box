@@ -129,13 +129,6 @@ func main() {
 	runPowershell(psWrite)
 
 	fmt.Println(" Running script inside WSL...")
-	err = runPowershell(fmt.Sprintf(`wsl -d Ubuntu -- bash %s`, tmpPath))
-
-	if err != nil {
-		fmt.Println(" Script execution failed:", err)
-	} else {
-		fmt.Println(" Setup completed successfully!")
-	}
 
 	fmt.Println("Press Enter to exit...")
 	bufio.NewReader(os.Stdin).ReadString('\n')

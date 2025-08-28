@@ -2,134 +2,152 @@ package main
 
 import (
 	"bufio"
-	"embed"
 	"fmt"
+	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/gorilla/websocket"
 )
 
-var embeddedScript embed.FS
-
-func runCommand(name string, args ...string) error {
-	fmt.Printf("Running: %s %s\n", name, strings.Join(args, " "))
-	cmd := exec.Command(name, args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
-func runSudo(command string) error {
-	fmt.Print("Enter sudo password: ")
-	password, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-	password = strings.TrimSpace(password)
-	fmt.Println("Password entered:", password)
+type WSMessage struct {
+	Type    string `json:"type"`    // "output", "error", "prompt", "done"
+	Content string `json:"content"` // actual text
+}
 
-	cmd := exec.Command("powershell", "-Command", command)
+func wsHandler(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Println("Upgrade failed:", err)
+		return
+	}
+	defer conn.Close()
 
-	stdin, _ := cmd.StdinPipe()
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	if err := Setup(conn); err != nil {
+		sendMessage(conn, "error", err.Error())
+	}
+}
+
+// Send message to browser
+func sendMessage(conn *websocket.Conn, msgType, content string) {
+	msg := WSMessage{Type: msgType, Content: content}
+	conn.WriteJSON(msg)
+}
+
+// Wait for input from browser
+func waitForInput(conn *websocket.Conn, prompt string) (string, error) {
+	sendMessage(conn, "prompt", prompt)
+
+	for {
+		var msg WSMessage
+		if err := conn.ReadJSON(&msg); err != nil {
+			return "", err
+		}
+		if msg.Type == "input" {
+			return msg.Content, nil
+		}
+	}
+}
+
+// Run command and stream output to websocket
+func runCommandWS(conn *websocket.Conn, name string, args ...string) error {
+	cmdStr := fmt.Sprintf("Running: %s %s", name, strings.Join(args, " "))
+	sendMessage(conn, "output", cmdStr)
+
+	cmd := exec.Command(name, args...)
+	stdout, _ := cmd.StdoutPipe()
+	stderr, _ := cmd.StderrPipe()
 
 	if err := cmd.Start(); err != nil {
-		fmt.Println("Error starting:", err)
-
+		sendMessage(conn, "error", "Failed to start command: "+err.Error())
+		return err
 	}
 
-	// Write password into sudo
-	stdin.Write([]byte(password + "\n"))
-	stdin.Close()
+	done := make(chan error)
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			sendMessage(conn, "output", scanner.Text())
+		}
+		done <- nil
+	}()
+	go func() {
+		scanner := bufio.NewScanner(stderr)
+		for scanner.Scan() {
+			sendMessage(conn, "error", scanner.Text())
+		}
+		done <- nil
+	}()
 
+	<-done
 	if err := cmd.Wait(); err != nil {
-		fmt.Println("Error:", err)
+		sendMessage(conn, "error", "Command finished with error: "+err.Error())
+		return err
 	}
 
-	return cmd.Run()
+	sendMessage(conn, "output", "Command finished successfully.")
+	return nil
 }
 
-func runPowershell(command string) error {
-	return runCommand("powershell", "-Command", command)
-}
+// Convert Windows path to WSL path
 func windowsToWslPath(winPath string) string {
-	// flip backslashes to forward slashes
 	path := strings.ReplaceAll(winPath, "\\", "/")
-
-	// add /mnt/ drive letter
 	if len(path) > 1 && path[1] == ':' {
 		drive := strings.ToLower(string(path[0]))
 		path = "/mnt/" + drive + path[2:]
 	}
-
 	return path
 }
 
-func main() {
-	fmt.Println("Starting setup...")
+// Full Setup workflow
+func Setup(conn *websocket.Conn) error {
+	sendMessage(conn, "output", "Starting setup...")
 
-	// Step 1: Ensure WSL exists
-	fmt.Println(" Checking for WSL...")
-	err := runPowershell("wsl --status")
-	if err != nil {
-		fmt.Println(" Installing WSL with Ubuntu...")
-		runPowershell("wsl --install -d Ubuntu")
+	// Check WSL
+	sendMessage(conn, "output", "Checking for WSL...")
+	if err := runCommandWS(conn, "powershell", "-Command", "wsl --status"); err != nil {
+		sendMessage(conn, "output", "Installing WSL with Ubuntu...")
 
-		// Step 1a: Register app to run again after reboot
+		runCommandWS(conn, "powershell", "-Command", "wsl --install -d Ubuntu")
+
+		// Register app to run again after reboot
 		exePath, _ := os.Executable()
-		runPowershell(fmt.Sprintf(
-			`New-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce' -Name 'SetupResume' -Value '"%s"' -PropertyType String -Force`,
-			exePath,
-		))
+		runCommandWS(conn, "powershell", "-Command",
+			fmt.Sprintf(`New-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce' -Name 'SetupResume' -Value '"%s"' -PropertyType String -Force`, exePath))
 
-		fmt.Println("Rebooting system to finish WSL installation...")
-		runPowershell("shutdown /r /t 5")
-		return
+		sendMessage(conn, "output", "Rebooting system to finish WSL installation...")
+		runCommandWS(conn, "powershell", "-Command", "shutdown /r /t 5")
+		return nil
 	}
 
-	//runSudo(`wsl -d Ubuntu -- bash -c "sudo -S apt update && sudo -S apt install -y docker.io"`)
-
-	// Get the directory where the executable is located
-	exePath, err := os.Getwd()
-	if err != nil {
-		fmt.Println(" Failed to get executable path:", err)
-		return
-	}
-	exeDir := filepath.Dir(exePath)
-	scriptPath := filepath.Join(exeDir, "startup-in-a-box/buildImage.sh")
-
-	// Check if the script exists
+	// Find script
+	exeDir, _ := os.Getwd()
+	scriptPath := filepath.Join(exeDir, "/buildImage.sh")
 	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
-		fmt.Printf(" Script not found: %s\n", scriptPath)
-		fmt.Println(" Please make sure buildImage.sh is in the same directory as the executable.")
-		return
+		sendMessage(conn, "error", "Script not found: "+scriptPath)
+		return err
 	}
-	fmt.Printf(" Script  found: %s\n", scriptPath)
-	// Read the script content
-	// scriptContent, err := os.ReadFile(scriptPath)
+	sendMessage(conn, "output", "Script found: "+scriptPath)
+
+	// Ask for sudo password
+	password, err := waitForInput(conn, "Enter sudo password:")
 	if err != nil {
-		fmt.Println(" Failed to read script file:", err)
-		return
+		return err
 	}
+	sendMessage(conn, "output", "Password received.")
 
-	tmpPath := "/tmp/buildImage.sh"
+	// Run script in WSL
+	linuxPath := windowsToWslPath(scriptPath)
+	cmdStr := fmt.Sprintf(`wsl -d Ubuntu -- bash -c "echo '%s' | sudo -S bash %s"`, password, linuxPath)
+	runCommandWS(conn, "powershell", "-Command", cmdStr)
 
-	// Write script to WSL using a simpler approach
-	// First, create the file with content using echo
-	// encoded := base64.StdEncoding.EncodeToString(scriptContent)
-	linuxpath := windowsToWslPath(scriptPath)
-	fmt.Print("Enter sudo password: ")
-	password, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-	password = strings.TrimSpace(password)
-	fmt.Println("Password entered:", password)
-	psWrite := fmt.Sprintf(
-		`wsl -d Ubuntu -- bash -c "echo '%s' | sudo -S bash %s"`,
-		password, linuxpath,
-	)
-
-	runPowershell(psWrite)
-
-	fmt.Println(" Running script inside WSL...")
-
-	fmt.Println("Press Enter to exit...")
-	bufio.NewReader(os.Stdin).ReadString('\n')
+	sendMessage(conn, "done", "Setup completed successfully.")
+	return nil
 }

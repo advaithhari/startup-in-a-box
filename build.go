@@ -129,7 +129,7 @@ func Setup(conn *websocket.Conn) error {
 
 	// Find script
 	exeDir, _ := os.Getwd()
-	scriptPath := filepath.Join(exeDir, "/buildImage.sh")
+	scriptPath := filepath.Join(exeDir, "buildImage.sh")
 	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
 		sendMessage(conn, "error", "Script not found: "+scriptPath)
 		return err

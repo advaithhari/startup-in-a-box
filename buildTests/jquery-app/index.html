@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Simple jQuery Web App</title>
+  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 40px; }
+    h1 { color: #007bff; }
+    input, button { padding: 8px; margin: 5px; }
+    ul { list-style-type: none; padding: 0; }
+    li { padding: 8px; background: #f4f4f4; margin: 5px 0; border-radius: 5px; }
+    li.done { text-decoration: line-through; color: gray; }
+  </style>
+</head>
+<body>
+  <h1>✅ jQuery To-Do App</h1>
+  
+  <input type="text" id="taskInput" placeholder="Enter a task...">
+  <button id="addTask">Add Task</button>
+  
+  <ul id="taskList"></ul>
+  
+  <script>
+    $(document).ready(function () {
+      // Add a task
+      $("#addTask").click(function () {
+        const task = $("#taskInput").val();
+        if (task.trim() !== "") {
+          $("#taskList").append(`<li>${task}</li>`);
+          $("#taskInput").val(""); // clear input
+        }
+      });
+      
+      // Mark as done when clicked
+      $("#taskList").on("click", "li", function () {
+        $(this).toggleClass("done");
+      });
+    });
+  </script>
+</body>
+</html>
